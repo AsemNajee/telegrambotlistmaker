@@ -29,13 +29,13 @@ export const setupMainBot = (bot: Telegraf<Context>) => {
     ctx.reply('من فضلك أرسل توكن البوت الخاص بك من @BotFather');
   });
 
-  bot.on('text', async (ctx) => {
+  bot.on('text', async (ctx, next) => {
     const text = ctx.message.text;
     const userId = ctx.from?.id;
 
     if (text.includes(':')) {
       const user = await User.findOne({ telegramId: userId });
-      if (user?.hasCreatedBot) return;
+      if (user?.hasCreatedBot) return next();
 
       try {
         const tempBot = new Telegraf(text);
@@ -65,15 +65,33 @@ export const setupMainBot = (bot: Telegraf<Context>) => {
       } catch (error) {
         ctx.reply('❌ التوكن غير صحيح أو حدث خطأ ما.');
       }
+    } else {
+      return next();
     }
   });
 
+  // أمر للمسؤول لعرض جميع البوتات
   bot.command('bots', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const bots = await Bot.find();
+    if (bots.length === 0) return ctx.reply('❌ لا توجد بوتات مصنوعة بعد.');
+    
     let message = '📋 قائمة البوتات المصنوعة:\n\n';
     bots.forEach((b, i) => {
       message += `${i + 1}. @${b.botUsername} (Owner: ${b.ownerId})\n`;
+    });
+    ctx.reply(message);
+  });
+
+  // أمر للمسؤول لعرض جميع المستخدمين
+  bot.command('users', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const users = await User.find();
+    if (users.length === 0) return ctx.reply('❌ لا يوجد مستخدمون بعد.');
+
+    let message = '👥 قائمة مستخدمي البوت:\n\n';
+    users.forEach((u, i) => {
+      message += `${i + 1}. ${u.username ? '@' + u.username : 'بدون يوزر'} (${u.telegramId})\n`;
     });
     ctx.reply(message);
   });
