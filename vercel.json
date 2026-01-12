@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "src/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/main-bot",
+      "methods": ["POST"],
+      "dest": "src/index.ts"
+    },
+    {
+      "src": "/api/setup-webhook",
+      "methods": ["GET"],
+      "dest": "src/index.ts"
+    },
+    {
+      "src": "/api/bot/(.*)",
+      "dest": "src/index.ts"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "src/index.ts"
+    }
+  ]
+}
