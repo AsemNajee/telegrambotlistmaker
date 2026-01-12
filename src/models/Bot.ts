@@ -8,6 +8,13 @@ export interface IBot extends Document {
   receptionGroupId?: number;
   publishMessage: string;
   columnsCount: number;
+  nameTemplate: string;
+  sortType: 'members_asc' | 'members_desc' | 'name_asc' | 'name_desc' | 'random';
+  minMembers: number;
+  maxNameLength: number;
+  isReceptionEnabled: boolean;
+  protectionAction: 'none' | 'notify_admin' | 'notify_user' | 'remove_and_leave';
+  isProtectionEnabled: boolean;
   isActive: boolean;
   createdAt: Date;
 }
@@ -20,10 +27,15 @@ const BotSchema: Schema = new Schema({
   receptionGroupId: { type: Number },
   publishMessage: { type: String, default: '📢 قائمة القنوات المشاركة:' },
   columnsCount: { type: Number, default: 1 },
+  nameTemplate: { type: String, default: '{Name}' },
+  sortType: { type: String, default: 'members_desc' },
+  minMembers: { type: Number, default: 0 },
+  maxNameLength: { type: Number, default: 50 },
+  isReceptionEnabled: { type: Boolean, default: true },
+  protectionAction: { type: String, default: 'notify_admin' },
+  isProtectionEnabled: { type: Boolean, default: true },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
 
 export default mongoose.model<IBot>('Bot', BotSchema);
-
-
