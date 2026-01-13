@@ -7,18 +7,21 @@ export interface IBot extends Document {
   adminGroupId?: number;
   receptionGroupId?: number;
   publishMessage: string;
-  publishImage?: string;
+  publishMedia?: { fileId: string, type: 'photo' | 'video' | 'animation' };
   listType: 'buttons' | 'text';
   columnsCount: number;
   nameTemplate: string;
-  sortType: 'members_asc' | 'members_desc' | 'name_asc' | 'name_desc' | 'random';
+  sortType: 'members_asc' | 'members_desc' | 'name_asc' | 'name_desc' | 'date_asc' | 'date_desc' | 'random';
   minMembers: number;
   maxNameLength: number;
   isReceptionEnabled: boolean;
+  isPrivateReceptionEnabled: boolean;
   isAutoBumpEnabled: boolean;
   bumpThreshold: number;
   isCleanNamesEnabled: boolean;
   isPreviewEnabled: boolean;
+  notifyAdminOnNewAdmin: boolean;
+  notifyAdminOnNewChannel: boolean;
   protectionAction: 'none' | 'notify_admin' | 'notify_user' | 'remove_and_leave';
   isProtectionEnabled: boolean;
   isActive: boolean;
@@ -32,7 +35,10 @@ const BotSchema: Schema = new Schema({
   adminGroupId: { type: Number },
   receptionGroupId: { type: Number },
   publishMessage: { type: String, default: '📢 قائمة القنوات المشاركة:' },
-  publishImage: { type: String },
+  publishMedia: {
+    fileId: String,
+    type: { type: String, enum: ['photo', 'video', 'animation'] }
+  },
   listType: { type: String, default: 'buttons' },
   columnsCount: { type: Number, default: 1 },
   nameTemplate: { type: String, default: '{Name}' },
@@ -40,10 +46,13 @@ const BotSchema: Schema = new Schema({
   minMembers: { type: Number, default: 0 },
   maxNameLength: { type: Number, default: 50 },
   isReceptionEnabled: { type: Boolean, default: true },
+  isPrivateReceptionEnabled: { type: Boolean, default: true },
   isAutoBumpEnabled: { type: Boolean, default: false },
   bumpThreshold: { type: Number, default: 1 },
   isCleanNamesEnabled: { type: Boolean, default: false },
   isPreviewEnabled: { type: Boolean, default: true },
+  notifyAdminOnNewAdmin: { type: Boolean, default: true },
+  notifyAdminOnNewChannel: { type: Boolean, default: true },
   protectionAction: { type: String, default: 'notify_admin' },
   isProtectionEnabled: { type: Boolean, default: true },
   isActive: { type: Boolean, default: true },

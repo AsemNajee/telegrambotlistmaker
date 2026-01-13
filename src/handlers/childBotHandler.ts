@@ -4,11 +4,6 @@ import Channel from '../models/Channel';
 
 const userStates: Map<number, { action: string, data?: any }> = new Map();
 
-// دالة لتنظيف الأسماء من الزخرفة
-const cleanText = (text: string) => {
-  return text.replace(/[^\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFFa-zA-Z0-0\s]/g, '').trim();
-};
-
 export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
   
   const notifyAdmin = async (message: string) => {
@@ -19,324 +14,225 @@ export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
     }
   };
 
-  const getAdminKeyboard = (botSettings: IBot) => {
-    return Markup.inlineKeyboard([
-      [Markup.button.callback('📊 الإحصائيات', 'stats'), Markup.button.callback('⚙️ الإعدادات', 'settings')],
-      [Markup.button.callback('📝 الرسالة والصورة', 'edit_content'), Markup.button.callback('🎨 التنسيق والزخرفة', 'edit_style')],
-      [Markup.button.callback('🔢 الأعمدة والحدود', 'edit_limits'), Markup.button.callback('🛡 الحماية والرفع', 'edit_advanced')],
-      [Markup.button.callback('📢 نشر', 'publish'), Markup.button.callback('🗑 حذف', 'delete')],
-      [Markup.button.callback('❓ المساعدة', 'help_main')]
-    ]);
+  // --- لوحات التحكم (Keyboards) ---
+
+  const getMainMenu = () => Markup.inlineKeyboard([
+    [Markup.button.callback('📜 إعدادات القائمة', 'menu_list'), Markup.button.callback('📥 إعدادات الاستقبال', 'menu_reception')],
+    [Markup.button.callback('👀 مراقبة القنوات', 'menu_watch'), Markup.button.callback('📊 الإحصائيات', 'stats')],
+    [Markup.button.callback('🚀 رفع القائمة', 'bump_list'), Markup.button.callback('📢 نشر جديد', 'publish')],
+    [Markup.button.callback('🗑 حذف القائمة', 'delete'), Markup.button.callback('❓ المساعدة', 'help_main')]
+  ]);
+
+  const getListSettingsMenu = (b: IBot) => Markup.inlineKeyboard([
+    [Markup.button.callback(`🔗 معاينة الروابط: ${b.isPreviewEnabled ? '✅' : '❌'}`, 'toggle_preview')],
+    [Markup.button.callback(`📝 نوع القائمة: ${b.listType === 'buttons' ? 'أزرار' : 'نص'}`, 'toggle_list_type')],
+    [Markup.button.callback('🔢 عدد الأعمدة', 'menu_cols'), Markup.button.callback('⚖️ الترتيب حسب', 'menu_sort')],
+    [Markup.button.callback('🎨 تنسيق الاسم', 'menu_style'), Markup.button.callback('📝 رسالة الرأس', 'edit_head')],
+    [Markup.button.callback('🔙 عودة', 'back_main')]
+  ]);
+
+  const getReceptionMenu = (b: IBot) => Markup.inlineKeyboard([
+    [Markup.button.callback(`📥 الاستقبال: ${b.isReceptionEnabled ? '✅' : '❌'}`, 'toggle_reception')],
+    [Markup.button.callback(`🔒 القنوات الخاصة: ${b.isPrivateReceptionEnabled ? '✅' : '❌'}`, 'toggle_private')],
+    [Markup.button.callback('👥 الحد الأدنى للأعضاء', 'edit_min_members')],
+    [Markup.button.callback('📏 أقصى طول للاسم', 'edit_max_name')],
+    [Markup.button.callback('🔙 عودة', 'back_main')]
+  ]);
+
+  // --- المعالجات الموحدة (Unified Handlers) ---
+
+  const showMainPanel = async (ctx: Context) => {
+    const b = await Bot.findById(botData._id);
+    if (!b) return;
+    const text = `👑 لوحة تحكم البوت: @${b.botUsername}\n\nاختر القسم الذي تريد إدارته من الأزرار أدناه:`;
+    if (ctx.callbackQuery) await ctx.editMessageText(text, getMainMenu());
+    else await ctx.reply(text, getMainMenu());
   };
 
-  bot.start((ctx) => {
-    if (ctx.from.id === botData.ownerId) {
-      ctx.reply('لوحة التحكم التفاعلية 👑', getAdminKeyboard(botData));
-    } else {
-      ctx.reply('مرحباً بك! لإضافة قناتك ارفع البوت مسؤولاً ثم أرسل الرابط لمجموعة الاستقبال.');
-    }
-  });
-
-  // مراقبة المنشورات الجديدة للرفع التلقائي
-  bot.on('channel_post', async (ctx) => {
-    const currentBot = await Bot.findById(botData._id);
-    if (!currentBot || !currentBot.isAutoBumpEnabled) return;
-
-    const channel = await Channel.findOne({ botId: botData._id, channelId: ctx.channelPost.chat.id });
-    if (!channel || !channel.lastMessageId) return;
-
-    channel.newPostsCount += 1;
-    if (channel.newPostsCount >= currentBot.bumpThreshold) {
-      // إعادة النشر في هذه القناة فقط
-      try {
-        await bot.telegram.deleteMessage(channel.channelId, channel.lastMessageId);
-        const list = await generateList(currentBot);
-        const sent = await sendList(bot, channel.channelId, currentBot, list);
-        channel.lastMessageId = sent.message_id;
-        channel.newPostsCount = 0;
-      } catch (e) {}
-    }
-    await channel.save();
-  });
+  bot.start(showMainPanel);
+  bot.command('panel', showMainPanel);
+  bot.command('control', showMainPanel);
 
   bot.on('callback_query', async (ctx) => {
     const data = (ctx.callbackQuery as any).data;
-    const userId = ctx.from.id;
-    const currentBot = await Bot.findById(botData._id);
-    if (!currentBot) return;
+    const b = await Bot.findById(botData._id);
+    if (!b) return;
 
-    if (data === 'settings') {
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback(currentBot.isReceptionEnabled ? '✅ الاستقبال: مفعل' : '❌ الاستقبال: معطل', 'toggle_reception')],
-        [Markup.button.callback(currentBot.isPreviewEnabled ? '✅ معاينة الروابط: مفعل' : '❌ معاينة الروابط: معطل', 'toggle_preview')],
-        [Markup.button.callback(currentBot.listType === 'buttons' ? '🔘 نوع القائمة: أزرار' : '📝 نوع القائمة: نص', 'toggle_list_type')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]);
-      ctx.editMessageText('⚙️ الإعدادات العامة:', kb);
-    } else if (data === 'edit_content') {
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback('📝 تعديل النص', 'edit_msg')],
-        [Markup.button.callback('🖼 تعديل الصورة', 'edit_img')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]);
-      ctx.editMessageText('📝 تخصيص المحتوى:', kb);
-    } else if (data === 'edit_style') {
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback('🎨 تعديل التنسيق', 'edit_template')],
-        [Markup.button.callback(currentBot.isCleanNamesEnabled ? '✨ تنظيف الزخرفة: مفعل' : '✨ تنظيف الزخرفة: معطل', 'toggle_clean')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]);
-      ctx.editMessageText('🎨 تخصيص المظهر:', kb);
-    } else if (data === 'edit_advanced') {
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback(currentBot.isAutoBumpEnabled ? '🚀 الرفع التلقائي: مفعل' : '🚀 الرفع التلقائي: معطل', 'toggle_bump')],
-        [Markup.button.callback(`الحد الأدنى للمنشورات: ${currentBot.bumpThreshold}`, 'none'), Markup.button.callback('-', 'dec_bump'), Markup.button.callback('+', 'inc_bump')],
-        [Markup.button.callback(`الترتيب: ${currentBot.sortType}`, 'cycle_sort')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]);
-      ctx.editMessageText('🛡 إعدادات متقدمة:', kb);
-    } else if (data === 'edit_img') {
-      userStates.set(userId, { action: 'awaiting_img' });
-      ctx.reply('🖼 ارسل رابط الصورة أو قم برفعها هنا:', Markup.inlineKeyboard([Markup.button.callback('❌ إلغاء', 'cancel_action')]));
+    if (data === 'menu_list') ctx.editMessageText('📜 إعدادات القائمة:', getListSettingsMenu(b));
+    else if (data === 'menu_reception') ctx.editMessageText('📥 إعدادات الاستقبال:', getReceptionMenu(b));
+    else if (data === 'back_main') showMainPanel(ctx);
+    else if (data === 'toggle_preview') {
+      b.isPreviewEnabled = !b.isPreviewEnabled;
+      await b.save();
+      ctx.editMessageReplyMarkup(getListSettingsMenu(b).reply_markup);
     } else if (data === 'toggle_list_type') {
-      currentBot.listType = currentBot.listType === 'buttons' ? 'text' : 'buttons';
-      await currentBot.save();
-      ctx.answerCbQuery('تم تغيير نوع القائمة');
-      ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-        [Markup.button.callback(currentBot.isReceptionEnabled ? '✅ الاستقبال: مفعل' : '❌ الاستقبال: معطل', 'toggle_reception')],
-        [Markup.button.callback(currentBot.isPreviewEnabled ? '✅ معاينة الروابط: مفعل' : '❌ معاينة الروابط: معطل', 'toggle_preview')],
-        [Markup.button.callback(currentBot.listType === 'buttons' ? '🔘 نوع القائمة: أزرار' : '📝 نوع القائمة: نص', 'toggle_list_type')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]).reply_markup);
-    } else if (data === 'toggle_clean') {
-      currentBot.isCleanNamesEnabled = !currentBot.isCleanNamesEnabled;
-      await currentBot.save();
-      ctx.answerCbQuery('تم التغيير');
-      ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-        [Markup.button.callback('🎨 تعديل التنسيق', 'edit_template')],
-        [Markup.button.callback(currentBot.isCleanNamesEnabled ? '✨ تنظيف الزخرفة: مفعل' : '✨ تنظيف الزخرفة: معطل', 'toggle_clean')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]).reply_markup);
-    } else if (data === 'toggle_bump') {
-      currentBot.isAutoBumpEnabled = !currentBot.isAutoBumpEnabled;
-      await currentBot.save();
-      ctx.answerCbQuery('تم التغيير');
-      ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-        [Markup.button.callback(currentBot.isAutoBumpEnabled ? '🚀 الرفع التلقائي: مفعل' : '🚀 الرفع التلقائي: معطل', 'toggle_bump')],
-        [Markup.button.callback(`الحد الأدنى للمنشورات: ${currentBot.bumpThreshold}`, 'none'), Markup.button.callback('-', 'dec_bump'), Markup.button.callback('+', 'inc_bump')],
-        [Markup.button.callback(`الترتيب: ${currentBot.sortType}`, 'cycle_sort')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]).reply_markup);
-    } else if (data === 'inc_bump' || data === 'dec_bump') {
-      currentBot.bumpThreshold = Math.max(1, currentBot.bumpThreshold + (data === 'inc_bump' ? 1 : -1));
-      await currentBot.save();
-      ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-        [Markup.button.callback(currentBot.isAutoBumpEnabled ? '🚀 الرفع التلقائي: مفعل' : '🚀 الرفع التلقائي: معطل', 'toggle_bump')],
-        [Markup.button.callback(`الحد الأدنى للمنشورات: ${currentBot.bumpThreshold}`, 'none'), Markup.button.callback('-', 'dec_bump'), Markup.button.callback('+', 'inc_bump')],
-        [Markup.button.callback(`الترتيب: ${currentBot.sortType}`, 'cycle_sort')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]).reply_markup);
-    } else if (data === 'back_main' || data === 'cancel_action') {
-      userStates.delete(userId);
-      ctx.editMessageText('لوحة التحكم التفاعلية 👑', getAdminKeyboard(currentBot));
+      b.listType = b.listType === 'buttons' ? 'text' : 'buttons';
+      await b.save();
+      ctx.editMessageReplyMarkup(getListSettingsMenu(b).reply_markup);
+    } else if (data === 'edit_head') {
+      userStates.set(ctx.from!.id, { action: 'awaiting_head' });
+      ctx.reply('📝 أرسل رسالة الرأس الجديدة (يمكنك توجيه منشور يحتوي على صورة أو فيديو):', Markup.inlineKeyboard([Markup.button.callback('❌ إلغاء', 'back_main')]));
+    } else if (data === 'menu_sort') {
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('👥 الأعضاء (تنازلي)', 'sort_members_desc'), Markup.button.callback('👥 الأعضاء (تصاعدي)', 'sort_members_asc')],
+        [Markup.button.callback('🔤 الاسم (تصاعدي)', 'sort_name_asc'), Markup.button.callback('🔤 الاسم (تنازلي)', 'sort_name_desc')],
+        [Markup.button.callback('📅 التاريخ (تنازلي)', 'sort_date_desc'), Markup.button.callback('🔙 عودة', 'menu_list')]
+      ]);
+      ctx.editMessageText('⚖️ اختر طريقة ترتيب القنوات:', kb);
+    } else if (data.startsWith('sort_')) {
+      b.sortType = data.replace('sort_', '') as any;
+      await b.save();
+      ctx.answerCbQuery('تم تحديث الترتيب');
+      ctx.editMessageText('📜 إعدادات القائمة:', getListSettingsMenu(b));
+    } else if (data === 'menu_style') {
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('- {Name}', 'style_1'), Markup.button.callback('{Nb} | {Name}', 'style_2')],
+        [Markup.button.callback('{Nb} - {Name}', 'style_3'), Markup.button.callback('➕ إضافة مخصص', 'edit_template')],
+        [Markup.button.callback('🔙 عودة', 'menu_list')]
+      ]);
+      ctx.editMessageText('🎨 اختر زخرفة جاهزة أو أضف مخصصاً:', kb);
+    } else if (data.startsWith('style_')) {
+      const styles: any = { 'style_1': '- {Name}', 'style_2': '{Nb} | {Name}', 'style_3': '{Nb} - {Name}' };
+      b.nameTemplate = styles[data];
+      await b.save();
+      ctx.answerCbQuery('تم تطبيق الزخرفة');
+      ctx.editMessageText('📜 إعدادات القائمة:', getListSettingsMenu(b));
     } else if (data === 'publish') {
-      await handlePublish(bot, currentBot, ctx);
+      await handlePublish(bot, b, ctx);
+    } else if (data === 'bump_list') {
+      await handleBump(bot, b, ctx);
     } else if (data === 'delete') {
-      await handleDelete(bot, currentBot, ctx);
-    } else if (data === 'toggle_preview') {
-      currentBot.isPreviewEnabled = !currentBot.isPreviewEnabled;
-      await currentBot.save();
-      ctx.answerCbQuery('تم التغيير');
-      ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-        [Markup.button.callback(currentBot.isReceptionEnabled ? '✅ الاستقبال: مفعل' : '❌ الاستقبال: معطل', 'toggle_reception')],
-        [Markup.button.callback(currentBot.isPreviewEnabled ? '✅ معاينة الروابط: مفعل' : '❌ معاينة الروابط: معطل', 'toggle_preview')],
-        [Markup.button.callback(currentBot.listType === 'buttons' ? '🔘 نوع القائمة: أزرار' : '📝 نوع القائمة: نص', 'toggle_list_type')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]).reply_markup);
-    } else if (data === 'edit_msg') {
-      userStates.set(userId, { action: 'awaiting_msg' });
-      ctx.reply('📝 ارسل رسالة النشر الجديدة:');
-    } else if (data === 'edit_template') {
-      userStates.set(userId, { action: 'awaiting_template' });
-      ctx.reply('🎨 ارسل تنسيق الأسماء الجديد ({Name}, {Nb}):');
-    } else if (data === 'edit_limits') {
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback(`الأعمدة: ${currentBot.columnsCount}`, 'none'), Markup.button.callback('-', 'dec_cols'), Markup.button.callback('+', 'inc_cols')],
-        [Markup.button.callback(`الحد الأدنى للأعضاء: ${currentBot.minMembers}`, 'none'), Markup.button.callback('-', 'dec_min'), Markup.button.callback('+', 'inc_min')],
-        [Markup.button.callback(`أقصى طول للاسم: ${currentBot.maxNameLength}`, 'none'), Markup.button.callback('-', 'dec_name'), Markup.button.callback('+', 'inc_name')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]);
-      ctx.editMessageText('🔢 الحدود والأعمدة:', kb);
-    } else if (data.startsWith('inc_') || data.startsWith('dec_')) {
-      const field = data.split('_')[1];
-      const isInc = data.startsWith('inc_');
-      if (field === 'cols') currentBot.columnsCount = Math.max(1, Math.min(5, currentBot.columnsCount + (isInc ? 1 : -1)));
-      if (field === 'min') currentBot.minMembers = Math.max(0, currentBot.minMembers + (isInc ? 10 : -10));
-      if (field === 'name') currentBot.maxNameLength = Math.max(5, currentBot.maxNameLength + (isInc ? 5 : -5));
-      await currentBot.save();
-      const kb = Markup.inlineKeyboard([
-        [Markup.button.callback(`الأعمدة: ${currentBot.columnsCount}`, 'none'), Markup.button.callback('-', 'dec_cols'), Markup.button.callback('+', 'inc_cols')],
-        [Markup.button.callback(`الحد الأدنى للأعضاء: ${currentBot.minMembers}`, 'none'), Markup.button.callback('-', 'dec_min'), Markup.button.callback('+', 'inc_min')],
-        [Markup.button.callback(`أقصى طول للاسم: ${currentBot.maxNameLength}`, 'none'), Markup.button.callback('-', 'dec_name'), Markup.button.callback('+', 'inc_name')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]);
-      ctx.editMessageReplyMarkup(kb.reply_markup);
-    } else if (data === 'cycle_sort') {
-      const sorts: any[] = ['members_desc', 'members_asc', 'name_asc', 'name_desc', 'random'];
-      currentBot.sortType = sorts[(sorts.indexOf(currentBot.sortType) + 1) % sorts.length];
-      await currentBot.save();
-      ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-        [Markup.button.callback(currentBot.isAutoBumpEnabled ? '🚀 الرفع التلقائي: مفعل' : '🚀 الرفع التلقائي: معطل', 'toggle_bump')],
-        [Markup.button.callback(`الحد الأدنى للمنشورات: ${currentBot.bumpThreshold}`, 'none'), Markup.button.callback('-', 'dec_bump'), Markup.button.callback('+', 'inc_bump')],
-        [Markup.button.callback(`الترتيب: ${currentBot.sortType}`, 'cycle_sort')],
-        [Markup.button.callback('🔙 عودة', 'back_main')]
-      ]).reply_markup);
+      await handleDelete(bot, b, ctx);
     }
   });
 
-  bot.on('text', async (ctx, next) => {
-    const userId = ctx.from.id;
+  // --- معالجة الرسائل (التوجيه والوسائط) ---
+
+  bot.on('message', async (ctx, next) => {
+    const userId = ctx.from!.id;
     const state = userStates.get(userId);
-    const currentBot = await Bot.findById(botData._id);
+    const b = await Bot.findById(botData._id);
+    if (!b) return next();
 
-    if (state && currentBot) {
-      if (state.action === 'awaiting_msg') {
-        currentBot.publishMessage = ctx.message.text;
-        await currentBot.save();
-        userStates.delete(userId);
-        return ctx.reply('✅ تم التحديث.', getAdminKeyboard(currentBot));
-      }
-      if (state.action === 'awaiting_template') {
-        currentBot.nameTemplate = ctx.message.text;
-        await currentBot.save();
-        userStates.delete(userId);
-        return ctx.reply('✅ تم التحديث.', getAdminKeyboard(currentBot));
-      }
-    }
-
-    if (ctx.chat.id === botData.receptionGroupId && currentBot?.isReceptionEnabled) {
-      const lines = ctx.message.text.split('\n');
-      let customName = lines.length >= 2 ? lines[0].trim() : '';
-      let link = lines.length >= 2 ? lines[1].trim() : lines[0].trim();
-
-      if (link.includes('t.me/') || link.startsWith('@')) {
+    // إضافة قناة خاصة عبر التوجيه
+    if (ctx.chat.id === b.receptionGroupId && ctx.message && (ctx.message as any).forward_from_chat) {
+      const forward = (ctx.message as any).forward_from_chat;
+      if (forward.type === 'channel') {
         try {
-          // حل نهائي للقنوات الخاصة: استخدام التوكن للتحقق من الصلاحيات
-          let target: string = link;
-          if (link.includes('t.me/+') || link.includes('t.me/joinchat/')) {
-            // روابط الدعوة تتطلب أن يكون البوت عضواً ليتمكن من جلب البيانات
-            target = link;
-          } else {
-            target = '@' + (link.split('t.me/')[1] || link.replace('@', '')).split('/')[0];
-          }
-
-          const chat = await bot.telegram.getChat(target);
+          const chat = await bot.telegram.getChat(forward.id);
           const memberCount = await bot.telegram.getChatMembersCount(chat.id);
           const botMember = await bot.telegram.getChatMember(chat.id, (await bot.telegram.getMe()).id);
           
-          if (botMember.status !== 'administrator') return ctx.reply('❌ ارفع البوت مسؤولاً أولاً.');
+          if (botMember.status !== 'administrator') return ctx.reply('❌ ارفع البوت مسؤولاً في القناة أولاً.');
 
-          let finalName = customName || (chat as any).title;
-          if (currentBot.isCleanNamesEnabled) finalName = cleanText(finalName);
+          const existing = await Channel.findOne({ botId: b._id, channelId: chat.id });
+          if (existing) return ctx.reply('⚠️ القناة مضافة مسبقاً.');
 
           await Channel.create({
-            botId: botData._id,
-            ownerId: ctx.from.id,
+            botId: b._id,
+            ownerId: userId,
             channelId: chat.id,
-            title: finalName,
-            inviteLink: link,
+            title: (chat as any).title,
+            inviteLink: (chat as any).invite_link || `https://t.me/${(chat as any).username}`,
             memberCount: memberCount,
             isApproved: true
           });
 
-          ctx.reply(`✅ تم القبول: ${finalName}`);
-          await notifyAdmin(`➕ قناة جديدة: ${finalName}`);
+          ctx.reply(`✅ تم قبول القناة الخاصة: ${(chat as any).title}`);
+          if (b.notifyAdminOnNewChannel) notifyAdmin(`➕ قناة خاصة جديدة: ${(chat as any).title}`);
+          return;
         } catch (e) {
-          ctx.reply('❌ تعذر التحقق. تأكد من الرابط وصلاحيات البوت.');
+          ctx.reply('❌ تعذر التحقق. تأكد من صلاحيات البوت.');
         }
       }
     }
-    return next();
-  });
 
-  bot.on('photo', async (ctx) => {
-    const userId = ctx.from.id;
-    const state = userStates.get(userId);
-    const currentBot = await Bot.findById(botData._id);
-    if (state?.action === 'awaiting_img' && currentBot) {
-      const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-      currentBot.publishImage = fileId;
-      await currentBot.save();
+    // تعديل رسالة الرأس (نص + وسائط)
+    if (state?.action === 'awaiting_head') {
+      const msg = ctx.message as any;
+      b.publishMessage = msg.text || msg.caption || '';
+      
+      if (msg.photo) b.publishMedia = { fileId: msg.photo[msg.photo.length - 1].file_id, type: 'photo' };
+      else if (msg.video) b.publishMedia = { fileId: msg.video.file_id, type: 'video' };
+      else if (msg.animation) b.publishMedia = { fileId: msg.animation.file_id, type: 'animation' };
+      else b.publishMedia = undefined;
+
+      await b.save();
       userStates.delete(userId);
-      ctx.reply('✅ تم تحديث الصورة.', getAdminKeyboard(currentBot));
+      return ctx.reply('✅ تم تحديث رسالة الرأس والوسائط.', getMainMenu());
     }
+
+    return next();
   });
 };
 
-async function generateList(botData: any) {
-  let channels = await Channel.find({ botId: botData._id, isApproved: true });
-  if (botData.sortType === 'members_desc') channels.sort((a, b) => b.memberCount - a.memberCount);
-  else if (botData.sortType === 'members_asc') channels.sort((a, b) => a.memberCount - b.memberCount);
-  else if (botData.sortType === 'name_asc') channels.sort((a, b) => a.title.localeCompare(b.title));
-  else if (botData.sortType === 'name_desc') channels.sort((a, b) => b.title.localeCompare(a.title));
-  else if (botData.sortType === 'random') channels.sort(() => Math.random() - 0.5);
+async function handlePublish(bot: Telegraf<Context>, b: any, ctx: Context) {
+  const channels = await Channel.find({ botId: b._id, isApproved: true });
+  if (channels.length === 0) return ctx.reply('❌ لا توجد قنوات.');
 
-  return channels;
+  // الترتيب المتقدم
+  if (b.sortType === 'members_desc') channels.sort((a, b) => b.memberCount - a.memberCount);
+  else if (b.sortType === 'members_asc') channels.sort((a, b) => a.memberCount - b.memberCount);
+  else if (b.sortType === 'name_asc') channels.sort((a, b) => a.title.localeCompare(b.title));
+  else if (b.sortType === 'date_desc') channels.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+  for (const ch of channels) {
+    try {
+      const sent = await sendList(bot, ch.channelId, b, channels);
+      await Channel.findByIdAndUpdate(ch._id, { lastMessageId: sent.message_id, initialMemberCount: ch.memberCount });
+    } catch (e) {}
+  }
+  ctx.reply('✅ تم النشر في جميع القنوات.');
 }
 
-async function sendList(bot: Telegraf<Context>, chatId: number, botData: any, channels: any[]) {
+async function handleBump(bot: Telegraf<Context>, b: any, ctx: Context) {
+  const channels = await Channel.find({ botId: b._id, lastMessageId: { $exists: true } });
+  for (const ch of channels) {
+    try {
+      await bot.telegram.deleteMessage(ch.channelId, ch.lastMessageId!);
+      const sent = await sendList(bot, ch.channelId, b, channels);
+      ch.lastMessageId = sent.message_id;
+      await ch.save();
+    } catch (e) {}
+  }
+  ctx.reply('🚀 تم رفع القائمة (حذف وإعادة نشر).');
+}
+
+async function handleDelete(bot: Telegraf<Context>, b: any, ctx: Context) {
+  const channels = await Channel.find({ botId: b._id, lastMessageId: { $exists: true } });
+  for (const ch of channels) {
+    try {
+      await bot.telegram.deleteMessage(ch.channelId, ch.lastMessageId!);
+      await Channel.findByIdAndUpdate(ch._id, { $unset: { lastMessageId: "" } });
+    } catch (e) {}
+  }
+  ctx.reply('🗑 تم حذف القائمة من جميع القنوات.');
+}
+
+async function sendList(bot: Telegraf<Context>, chatId: number, b: any, channels: any[]) {
   const textList = channels.map(ch => {
-    const name = botData.nameTemplate.replace('{Name}', ch.title).replace('{Nb}', ch.memberCount.toString());
-    return botData.listType === 'text' ? `• [${name}](${ch.inviteLink})` : name;
+    const name = b.nameTemplate.replace('{Name}', ch.title).replace('{Nb}', ch.memberCount.toString());
+    return b.listType === 'text' ? `• [${name}](${ch.inviteLink})` : name;
   });
 
-  const extra: any = { parse_mode: 'Markdown', disable_web_page_preview: !botData.isPreviewEnabled };
+  const extra: any = { parse_mode: 'Markdown', disable_web_page_preview: !b.isPreviewEnabled };
 
-  if (botData.listType === 'buttons') {
+  if (b.listType === 'buttons') {
     const buttons = textList.map((name, i) => Markup.button.url(name, channels[i].inviteLink));
     const rows = [];
-    for (let i = 0; i < buttons.length; i += botData.columnsCount) {
-      rows.push(buttons.slice(i, i + botData.columnsCount));
+    for (let i = 0; i < buttons.length; i += b.columnsCount) {
+      rows.push(buttons.slice(i, i + b.columnsCount));
     }
     extra.reply_markup = Markup.inlineKeyboard(rows).reply_markup;
   }
 
-  const content = botData.listType === 'text' ? `${botData.publishMessage}\n\n${textList.join('\n')}` : botData.publishMessage;
+  const content = b.listType === 'text' ? `${b.publishMessage}\n\n${textList.join('\n')}` : b.publishMessage;
 
-  if (botData.publishImage) {
-    return await bot.telegram.sendPhoto(chatId, botData.publishImage, { caption: content, ...extra });
-  } else {
-    return await bot.telegram.sendMessage(chatId, content, extra);
+  if (b.publishMedia) {
+    const { fileId, type } = b.publishMedia;
+    if (type === 'photo') return await bot.telegram.sendPhoto(chatId, fileId, { caption: content, ...extra });
+    if (type === 'video') return await bot.telegram.sendVideo(chatId, fileId, { caption: content, ...extra });
+    if (type === 'animation') return await bot.telegram.sendAnimation(chatId, fileId, { caption: content, ...extra });
   }
-}
-
-async function handlePublish(bot: Telegraf<Context>, botData: any, ctx: Context) {
-  const channels = await generateList(botData);
-  if (channels.length === 0) return ctx.reply('❌ لا توجد قنوات.');
-
-  let success = 0;
-  for (const ch of channels) {
-    try {
-      const sent = await sendList(bot, ch.channelId, botData, channels);
-      await Channel.findByIdAndUpdate(ch._id, { lastMessageId: sent.message_id, initialMemberCount: ch.memberCount, newPostsCount: 0 });
-      success++;
-    } catch (e) {}
-  }
-  ctx.reply(`✅ تم النشر في ${success} قناة.`);
-}
-
-async function handleDelete(bot: Telegraf<Context>, botData: any, ctx: Context) {
-  const channels = await Channel.find({ botId: botData._id, lastMessageId: { $exists: true } });
-  let count = 0;
-  let report = '📈 تقرير الزيادة:\n';
-  for (const ch of channels) {
-    try {
-      const current = await bot.telegram.getChatMembersCount(ch.channelId);
-      report += `${ch.title}: +${current - ch.initialMemberCount}\n`;
-      await bot.telegram.deleteMessage(ch.channelId, ch.lastMessageId!);
-      await Channel.findByIdAndUpdate(ch._id, { $unset: { lastMessageId: "" }, memberCount: current });
-      count++;
-    } catch (e) {}
-  }
-  ctx.reply(`🗑 تم الحذف من ${count} قناة.\n\n${report}`);
+  return await bot.telegram.sendMessage(chatId, content, extra);
 }
