@@ -9,6 +9,7 @@ export interface IChannel extends Document {
   lastMessageId?: number;
   memberCount: number;
   initialMemberCount: number;
+  newPostsCount: number;
   isApproved: boolean;
   createdAt: Date;
 }
@@ -22,6 +23,7 @@ const ChannelSchema: Schema = new Schema({
   lastMessageId: { type: Number },
   memberCount: { type: Number, default: 0 },
   initialMemberCount: { type: Number, default: 0 },
+  newPostsCount: { type: Number, default: 0 },
   isApproved: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 });
