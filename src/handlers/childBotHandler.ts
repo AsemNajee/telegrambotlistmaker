@@ -7,9 +7,10 @@ const userStates: Map<number, { action: string, data?: any }> = new Map();
 export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
   
   const notifyAdmin = async (message: string) => {
-    if (botData.adminGroupId) {
+    const b = await Bot.findById(botData._id);
+    if (b?.adminGroupId) {
       try {
-        await bot.telegram.sendMessage(botData.adminGroupId, `🔔 إشعار إداري:\n${message}`);
+        await bot.telegram.sendMessage(b.adminGroupId, `🔔 إشعار إداري:\n${message}`);
       } catch (e) {}
     }
   };
@@ -28,6 +29,7 @@ export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
     [Markup.button.callback(`📝 نوع القائمة: ${b.listType === 'buttons' ? 'أزرار' : 'نص'}`, 'toggle_list_type')],
     [Markup.button.callback('🔢 عدد الأعمدة', 'menu_cols'), Markup.button.callback('⚖️ الترتيب حسب', 'menu_sort')],
     [Markup.button.callback('🎨 تنسيق الاسم', 'menu_style'), Markup.button.callback('📝 رسالة الرأس', 'edit_head')],
+    [Markup.button.callback('👁 معاينة فورية', 'live_preview')],
     [Markup.button.callback('🔙 عودة', 'back_main')]
   ]);
 
@@ -59,6 +61,23 @@ export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
   bot.start(showMainPanel);
   bot.command('panel', showMainPanel);
   bot.command('control', showMainPanel);
+
+  // أوامر تعيين المجموعات
+  bot.command('set_admin', async (ctx) => {
+    const b = await Bot.findById(botData._id);
+    if (!b || b.ownerId !== ctx.from.id) return;
+    b.adminGroupId = ctx.chat.id;
+    await b.save();
+    ctx.reply('✅ تم تعيين هذه المجموعة كمجموعة للإدارة.');
+  });
+
+  bot.command('set_reception', async (ctx) => {
+    const b = await Bot.findById(botData._id);
+    if (!b || b.ownerId !== ctx.from.id) return;
+    b.receptionGroupId = ctx.chat.id;
+    await b.save();
+    ctx.reply('✅ تم تعيين هذه المجموعة كمجموعة لاستقبال القنوات.');
+  });
 
   bot.on('callback_query', async (ctx) => {
     const data = (ctx.callbackQuery as any).data;
@@ -108,7 +127,25 @@ export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
       const val = parseInt(data.split('_')[2]);
       b.minMembers = data.startsWith('add_') ? b.minMembers + val : Math.max(0, b.minMembers - val);
       await b.save();
+      ctx.answerCbQuery(`القيمة الجديدة: ${b.minMembers}`);
       ctx.editMessageText(`👥 الحد الأدنى للأعضاء الحالي: ${b.minMembers}`, (ctx.callbackQuery as any).message.reply_markup);
+    }
+
+    // إعدادات التنسيق (Style)
+    else if (data === 'menu_style') {
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('- {Name}', 'style_1'), Markup.button.callback('{Nb} | {Name}', 'style_2')],
+        [Markup.button.callback('{Nb} - {Name}', 'style_3'), Markup.button.callback('➕ إضافة مخصص', 'edit_template')],
+        [Markup.button.callback('🔙 عودة', 'menu_list')]
+      ]);
+      ctx.editMessageText('🎨 اختر زخرفة جاهزة أو أضف مخصصاً:', kb);
+    }
+    else if (data.startsWith('style_')) {
+      const styles: any = { 'style_1': '- {Name}', 'style_2': '{Nb} | {Name}', 'style_3': '{Nb} - {Name}' };
+      b.nameTemplate = styles[data];
+      await b.save();
+      ctx.answerCbQuery('تم تطبيق الزخرفة');
+      ctx.editMessageText('📜 إعدادات القائمة:', getListSettingsMenu(b));
     }
 
     // إحصائيات
@@ -120,67 +157,59 @@ export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
 
     // المساعدة
     else if (data === 'help_main') {
-      ctx.editMessageText('❓ قسم المساعدة:\n\n- أرسل /panel لفتح لوحة التحكم.\n- لتعديل رسالة الرأس، اختر "إعدادات القائمة" ثم "رسالة الرأس".\n- لإضافة قناة خاصة، قم بتوجيه منشور منها لمجموعة الاستقبال.', Markup.inlineKeyboard([Markup.button.callback('🔙 عودة', 'back_main')]));
+      ctx.editMessageText('❓ قسم المساعدة:\n\n- أرسل /panel لفتح لوحة التحكم.\n- لتعديل رسالة الرأس، اختر "إعدادات القائمة" ثم "رسالة الرأس".\n- لإضافة قناة خاصة، قم بتوجيه منشور منها لمجموعة الاستقبال.\n- لتعيين المجموعات، استخدم /set_admin و /set_reception.', Markup.inlineKeyboard([Markup.button.callback('🔙 عودة', 'back_main')]));
+    }
+
+    // المعاينة الفورية
+    else if (data === 'live_preview') {
+      const channels = await Channel.find({ botId: b._id, isApproved: true }).limit(10);
+      if (channels.length === 0) return ctx.answerCbQuery('❌ لا توجد قنوات للمعاينة.', { show_alert: true });
+      await sendList(bot, ctx.chat!.id, b, channels, true);
     }
 
     // العمليات (نشر، رفع، حذف)
-    else if (data === 'publish') await handlePublish(bot, b, ctx);
+    else if (data === 'publish') {
+      const activePublish = await Channel.findOne({ botId: b._id, lastMessageId: { $exists: true } });
+      if (activePublish) return ctx.answerCbQuery('⚠️ يجب حذف القائمة الحالية قبل نشر قائمة جديدة.', { show_alert: true });
+      await handlePublish(bot, b, ctx);
+    }
     else if (data === 'bump_list') await handleBump(bot, b, ctx);
     else if (data === 'delete') await handleDelete(bot, b, ctx);
     
     else if (data === 'edit_head') {
       userStates.set(ctx.from!.id, { action: 'awaiting_head' });
-      ctx.reply('📝 أرسل رسالة الرأس الجديدة (يمكنك توجيه منشور يحتوي على صورة أو فيديو):', Markup.inlineKeyboard([Markup.button.callback('❌ إلغاء', 'back_main')]));
+      ctx.reply('📝 أرسل رسالة الرأس الجديدة (نص أو ميديا):', Markup.inlineKeyboard([Markup.button.callback('❌ إلغاء', 'back_main')]));
     }
   });
 
   // --- معالجة الرسائل (التوجيه والوسائط) ---
 
   bot.on('message', async (ctx, next) => {
-    const userId = ctx.from!.id;
-    const state = userStates.get(userId);
     const b = await Bot.findById(botData._id);
     if (!b) return next();
 
-    // إضافة قناة خاصة عبر التوجيه
-    if (ctx.chat.id === b.receptionGroupId && ctx.message && (ctx.message as any).forward_from_chat) {
-      const forward = (ctx.message as any).forward_from_chat;
-      if (forward.type === 'channel') {
-        try {
-          const chat = await bot.telegram.getChat(forward.id);
-          const memberCount = await bot.telegram.getChatMembersCount(chat.id);
-          const botMember = await bot.telegram.getChatMember(chat.id, (await bot.telegram.getMe()).id);
-          
-          if (botMember.status !== 'administrator') return ctx.reply('❌ ارفع البوت مسؤولاً في القناة أولاً.');
-          if (memberCount < b.minMembers) return ctx.reply(`❌ القناة لا تستوفي الحد الأدنى للأعضاء (${b.minMembers}).`);
+    const userId = ctx.from!.id;
+    const msg = ctx.message as any;
+    const isReceptionGroup = ctx.chat.id === b.receptionGroupId;
 
-          const existing = await Channel.findOne({ botId: b._id, channelId: chat.id });
-          if (existing) return ctx.reply('⚠️ القناة مضافة مسبقاً.');
-
-          await Channel.create({
-            botId: b._id,
-            ownerId: userId,
-            channelId: chat.id,
-            title: (chat as any).title,
-            inviteLink: (chat as any).invite_link || `https://t.me/${(chat as any).username}`,
-            memberCount: memberCount,
-            isApproved: true
-          });
-
-          ctx.reply(`✅ تم قبول القناة الخاصة: ${(chat as any).title}`);
-          if (b.notifyAdminOnNewChannel) notifyAdmin(`➕ قناة خاصة جديدة: ${(chat as any).title}`);
-          return;
-        } catch (e) {
-          ctx.reply('❌ تعذر التحقق. تأكد من الرابط وصلاحيات البوت.');
-        }
+    // استقبال القنوات (توجيه أو روابط)
+    if (b.isReceptionEnabled && (isReceptionGroup || ctx.chat.type === 'private')) {
+      // التحقق من التوجيه (للقنوات الخاصة)
+      if (msg.forward_from_chat && msg.forward_from_chat.type === 'channel') {
+        return handleChannelAdd(bot, b, ctx, msg.forward_from_chat.id);
+      }
+      // التحقق من الروابط النصية
+      const text = msg.text || msg.caption || '';
+      const channelMatch = text.match(/t\.me\/([a-zA-Z0-9_]{5,})/);
+      if (channelMatch) {
+        return handleChannelAdd(bot, b, ctx, `@${channelMatch[1]}`);
       }
     }
 
     // تعديل رسالة الرأس (نص + وسائط)
+    const state = userStates.get(userId);
     if (state?.action === 'awaiting_head') {
-      const msg = ctx.message as any;
       b.publishMessage = msg.text || msg.caption || '';
-      
       if (msg.photo) b.publishMedia = { fileId: msg.photo[msg.photo.length - 1].file_id, type: 'photo' };
       else if (msg.video) b.publishMedia = { fileId: msg.video.file_id, type: 'video' };
       else if (msg.animation) b.publishMedia = { fileId: msg.animation.file_id, type: 'animation' };
@@ -195,11 +224,42 @@ export const setupChildBot = (bot: Telegraf<Context>, botData: IBot) => {
   });
 };
 
+async function handleChannelAdd(bot: Telegraf<Context>, b: any, ctx: Context, channelIdentifier: string | number) {
+  try {
+    const chat = await bot.telegram.getChat(channelIdentifier);
+    const memberCount = await bot.telegram.getChatMembersCount(chat.id);
+    const botMember = await bot.telegram.getChatMember(chat.id, (await bot.telegram.getMe()).id);
+    
+    if (botMember.status !== 'administrator') return ctx.reply('❌ ارفع البوت مسؤولاً في القناة أولاً.');
+    if (memberCount < b.minMembers) return ctx.reply(`❌ القناة لا تستوفي الحد الأدنى للأعضاء (${b.minMembers}).`);
+
+    const existing = await Channel.findOne({ botId: b._id, channelId: chat.id });
+    if (existing) return ctx.reply('⚠️ القناة مضافة مسبقاً.');
+
+    await Channel.create({
+      botId: b._id,
+      ownerId: ctx.from!.id,
+      channelId: chat.id,
+      title: (chat as any).title,
+      inviteLink: (chat as any).invite_link || `https://t.me/${(chat as any).username}`,
+      memberCount: memberCount,
+      isApproved: true
+    });
+
+    ctx.reply(`✅ تم قبول القناة: ${(chat as any).title}`);
+    if (b.notifyAdminOnNewChannel && b.adminGroupId) {
+      await bot.telegram.sendMessage(b.adminGroupId, `➕ قناة جديدة مضافة: ${(chat as any).title}`);
+    }
+  } catch (e) {
+    ctx.reply('❌ تعذر التحقق. تأكد من الرابط وصلاحيات البوت.');
+  }
+}
+
 async function handlePublish(bot: Telegraf<Context>, b: any, ctx: Context) {
   const channels = await Channel.find({ botId: b._id, isApproved: true });
   if (channels.length === 0) return ctx.reply('❌ لا توجد قنوات.');
 
-  // الترتيب
+  // الترتيب المتقدم
   if (b.sortType === 'members_desc') channels.sort((a, b) => b.memberCount - a.memberCount);
   else if (b.sortType === 'members_asc') channels.sort((a, b) => a.memberCount - b.memberCount);
   else if (b.sortType === 'name_asc') channels.sort((a, b) => a.title.localeCompare(b.title));
@@ -217,6 +277,8 @@ async function handlePublish(bot: Telegraf<Context>, b: any, ctx: Context) {
 async function handleBump(bot: Telegraf<Context>, b: any, ctx: Context) {
   const channels = await Channel.find({ botId: b._id, lastMessageId: { $exists: true } });
   const allApproved = await Channel.find({ botId: b._id, isApproved: true });
+  if (channels.length === 0) return ctx.reply('❌ لا توجد قائمة منشورة لرفعها.');
+
   for (const ch of channels) {
     try {
       await bot.telegram.deleteMessage(ch.channelId, ch.lastMessageId!);
@@ -230,6 +292,8 @@ async function handleBump(bot: Telegraf<Context>, b: any, ctx: Context) {
 
 async function handleDelete(bot: Telegraf<Context>, b: any, ctx: Context) {
   const channels = await Channel.find({ botId: b._id, lastMessageId: { $exists: true } });
+  if (channels.length === 0) return ctx.reply('❌ لا توجد قائمة منشورة لحذفها.');
+
   for (const ch of channels) {
     try {
       await bot.telegram.deleteMessage(ch.channelId, ch.lastMessageId!);
@@ -239,7 +303,7 @@ async function handleDelete(bot: Telegraf<Context>, b: any, ctx: Context) {
   ctx.reply('🗑 تم حذف القائمة من جميع القنوات.');
 }
 
-async function sendList(bot: Telegraf<Context>, chatId: number, b: any, channels: any[]) {
+async function sendList(bot: Telegraf<Context>, chatId: number, b: any, channels: any[], isPreview = false) {
   const textList = channels.map(ch => {
     const name = b.nameTemplate.replace('{Name}', ch.title).replace('{Nb}', ch.memberCount.toString());
     return b.listType === 'text' ? `• [${name}](${ch.inviteLink})` : name;
